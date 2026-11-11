@@ -1,0 +1,34 @@
+name: Validate localization
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**/*.xcstrings'
+      - '**/Info.plist'
+      - '.github/workflows/validate-localization.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Russian strings and language registration
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, plistlib
+          total = 0
+          for path in pathlib.Path('.').rglob('*.xcstrings'):
+              data = json.loads(path.read_text())
+              for key, entry in data['strings'].items():
+                  assert 'ru' in entry.get('localizations', {}), (path, key)
+              total += len(data['strings'])
+          for name in ['App/Info.plist', 'Share/Info.plist', 'Widget/Info.plist']:
+              data = plistlib.loads(pathlib.Path(name).read_bytes())
+              assert 'ru' in data['CFBundleLocalizations'], name
+          print(f'Russian localization: {total} entries verified')
+          PY
