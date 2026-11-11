@@ -1,0 +1,85 @@
+name: Build Russian IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'App/**'
+      - 'Shared/**'
+      - 'Resources/**'
+      - 'Share/**'
+      - 'Widget/**'
+      - 'project.yml'
+      - 'build-ipa.sh'
+      - '.github/workflows/build-ipa.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 26
+        shell: bash
+        run: |
+          XCODE_APP=$(python3 - <<'PY'
+          import glob, plistlib, re
+          candidates = []
+          for path in glob.glob('/Applications/Xcode*.app'):
+              with open(path + '/Contents/Info.plist', 'rb') as f:
+                  version = plistlib.load(f)['CFBundleShortVersionString']
+              parts = tuple(map(int, re.findall(r'\d+', version)))
+              if parts[0] == 26:
+                  candidates.append((parts, path))
+          if not candidates:
+              raise SystemExit('Xcode 26 is not installed on this runner')
+          print(max(candidates)[1])
+          PY
+          )
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build IPA using the repository script
+        shell: bash
+        run: |
+          mkdir -p /tmp/homeroll-ci
+          rsync -a --exclude=.git ./ /tmp/homeroll-ci/
+          cd /tmp/homeroll-ci
+          ./build-ipa.sh
+          cp build-ipa/HomeRoll.ipa "$GITHUB_WORKSPACE/HomeRoll-ru.ipa"
+          shasum -a 256 "$GITHUB_WORKSPACE/HomeRoll-ru.ipa"
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: HomeRoll-ru
+          path: HomeRoll-ru.ipa
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish downloadable IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          TAG="ru-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          printf 'Русская локализация HomeRoll. IPA для установки через инструменты переподписи.\n\nCommit: %s\n\nSHA-256:\n' "$GITHUB_SHA" > /tmp/release-notes.txt
+          shasum -a 256 HomeRoll-ru.ipa >> /tmp/release-notes.txt
+          gh release create "$TAG" HomeRoll-ru.ipa --title "HomeRoll — русский перевод (сборка ${GITHUB_RUN_NUMBER})" --notes-file /tmp/release-notes.txt --target "$GITHUB_SHA"
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: /tmp/homeroll-ci/build-ipa.log
+          if-no-files-found: ignore
+          retention-days: 7
